@@ -1,0 +1,3 @@
+# Keep VietOCR Python sources despite the root model/ ignore rule.
+!model/
+!model/**

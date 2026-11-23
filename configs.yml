@@ -1,0 +1,12 @@
+# Model paths configuration
+model_paths:
+  yolo_det_4cornercard_model_path: "model/det4corner/best.onnx"
+  yolo_det_textcc_model_path: "model/textdet/cc/best.onnx"
+  yolo_det_textcccd_model_path: "model/textdet/cccd/best.onnx"
+  vietocr_rec_textregion_model_path: "model/vietocr"
+ 
+
+# Threshold configurations
+thresholds:
+  yolo_conf_threshold_det_cornercard: 0.2
+  yolo_conf_threshold_det_text: 0.5

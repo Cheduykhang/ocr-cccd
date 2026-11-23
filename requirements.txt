@@ -1,0 +1,39 @@
+# Install: python -m pip install -r requirements.txt
+# Python 3.11 (matches Dockerfile)
+
+# API server
+fastapi[standard]==0.116.1
+# uvicorn==0.35.0
+
+paddlepaddle==3.1.0
+paddleocr==3.1.0
+
+
+
+# python-multipart==0.0.20
+# pydantic==2.11.7
+# pydantic-settings==2.10.1
+# python-dotenv==1.1.1
+
+
+
+# Image processing and configuration
+# numpy==2.2.6
+# opencv-python-headless==4.11.0.86
+# Pillow==11.3.0
+# PyYAML==6.0.2
+
+# ONNX inference (CPU, matches Dockerfile)
+onnx==1.18.0
+onnxruntime==1.22.0
+# For GPU: replace onnxruntime above with onnxruntime-gpu==1.22.0.
+# Install only one ONNX Runtime package.
+
+# API client (scripts.py)
+# requests==2.32.5
+
+# Optional: PyTorch model code under src/vietocrOnnxModule/model/
+# The ONNX API does not import these modules.
+# torch
+# torchvision
+# einops

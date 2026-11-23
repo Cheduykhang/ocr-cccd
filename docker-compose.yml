@@ -1,0 +1,44 @@
+services:
+  ocr-app:
+    image: ocr-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Enable these build args only when the Docker host requires a corporate proxy.
+      # args:
+      #   PROXY_USER: ${PROXY_USER}
+      #   PROXY_PASS: ${PROXY_PASS}
+      #   PROXY_HOST: ${PROXY_HOST}
+      #   PROXY_PORT: ${PROXY_PORT}
+    volumes:
+      - ./model:/app/model
+      - ./src:/app/src
+      - ./main.py:/app/main.py
+      - ./configs.yml:/app/configs.yml
+      - ./logs:/app/logs
+    ports:
+      - "9930:9930"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:9930/health/ready', timeout=3).close()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - PYTHONPATH=/app/src:/app
+      - LOG_DIR=/app/logs
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_BACKUP_COUNT=${LOG_BACKUP_COUNT:-5}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    container_name: ocr-container
