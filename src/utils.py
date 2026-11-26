@@ -312,6 +312,11 @@ def format_date(date_str: str, code_gender_cen: str, date_type: str) -> str:
             century = '23'
  
     return f"{day}/{month}/{century}{year}"
+ISSUE_LOC = {
+    'cc': "BỘ CÔNG AN",
+    'cccd': "CỤC CẢNH SÁT QUẢN LÝ HÀNH CHÍNH VỀ TRẬT TỰ XÃ HỘI",
+}
+
 # Nhận diện dòng MRZ (TD1, 3 dòng x 30 ký tự) theo nội dung, không theo thứ tự trong mảng.
 MRZ_LINE1_RE = re.compile(r'^ID[A-Z<]{3}')        # IDVNM + số giấy tờ + ...
 MRZ_LINE2_RE = re.compile(r'^\d{7}[MF<]')         # ngày sinh (6) + check (1) + giới tính
@@ -598,6 +603,13 @@ def map_text2card(fieldname_text: Dict[str, Dict[str, Any]], require_type: str, 
             if mrz_id:
                 data['id'] = mrz_id
                 data['id_prob'] = 1.0
+        # Nơi cấp in cố định ở mặt sau, không cần OCR:
+        # - CC (mẫu từ 01/07/2024, Thông tư 16/2024/TT-BCA): "BỘ CÔNG AN".
+        # - CCCD gắn chip: thẻ in chức danh "CỤC TRƯỞNG CỤC CẢNH SÁT QLHC VỀ TTXH"; trả tên cơ quan
+        #   (bỏ "Cục trưởng") vì đó là cách ghi "nơi cấp" đúng khi khai hồ sơ.
+        if require_side == 'back':
+            data['issue_loc'] = ISSUE_LOC[require_type]
+            data['issue_loc_prob'] = 1.0
         if require_type == "cc" and require_side == 'front':
             data['type'] = 'cc_front'
             data['type_new'] = 'cccd_chip_front'
