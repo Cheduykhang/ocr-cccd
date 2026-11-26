@@ -15,7 +15,8 @@ from utils import (
     validate_image_quality,
     validate_and_crop_card,
     map_text2card,
-    correct_image_orientation
+    correct_image_orientation,
+    ensure_valid_id
 )
 from src.logger import logger
 from exceptions import CardDetectionError, BadCaptureError, TextRegionDetectError, TextExtractError, BadBoxError
@@ -310,6 +311,10 @@ class IdCardOCRService:
         start_time = time.time()
         mapped_text = map_text2card(fieldname_text=field_text, require_type=card_type, require_side=card_side)
         logger.info(f'Time for map field: {time.time() - start_time:.3f}s')
+
+        # id được BE lưu vào DB: không có id hợp lệ thì báo lỗi để người dùng chụp lại,
+        # không trả về id rỗng hoặc id nghi ngờ.
+        ensure_valid_id(mapped_text, require_side=card_side)
 
         return [mapped_text]
  

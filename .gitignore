@@ -1,2 +1,37 @@
-
+# Model weights (mounted vào container, không commit)
 *.onnx
+/model/
+
+# Tài liệu Word và file tạm của Office
+*.docx
+*.doc
+~$*
+
+# Ảnh thẻ dùng để test: chứa dữ liệu cá nhân, không commit
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.heic
+
+# Log và ảnh debug do service sinh ra
+/logs/
+*.log
+/analysis_error/
+
+# Biến môi trường / thông tin proxy
+.env
+.env-*
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# IDE / hệ điều hành
+.DS_Store
+.idea/
+.vscode/

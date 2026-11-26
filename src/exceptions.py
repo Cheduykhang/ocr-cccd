@@ -29,6 +29,10 @@ class TextExtractError(OCRBaseException):
     """Exception raised when the extracted texts from text regions is error."""
     pass
 
+class IdNotFoundError(OCRBaseException):
+    """Exception raised when no valid 12-digit ID number can be read from the card."""
+    pass
+
 class ModelNotLoadedError(OCRBaseException):
     """Exception raised when a required model couldn't be loaded."""
     pass
