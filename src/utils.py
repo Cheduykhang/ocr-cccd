@@ -1,3 +1,6 @@
+import copy
+import datetime
+import re
 import numpy as np
 import cv2
 from PIL import Image, ExifTags, ImageOps
@@ -7,6 +10,7 @@ from exceptions import (
     CardDetectionError,
     BadBoxError,
     ModelNotLoadedError,
+    IdNotFoundError,
     OCRBaseException
 )
 from configs import settings
@@ -88,64 +92,33 @@ def validate_image_quality(image: Image.Image) -> None:
 def correct_image_orientation(image: Image.Image) -> Image.Image:
     """
     Correct the orientation of an image based on EXIF data.
-    
+
+    ImageOps.exif_transpose xử lý đủ 8 giá trị EXIF orientation (xoay và lật gương)
+    và xoá tag orientation sau khi xoay. Không xoay thủ công trước đó, vì ảnh vẫn giữ
+    tag EXIF cũ nên exif_transpose sẽ xoay thêm lần nữa (lỗi xoay hai lần với
+    orientation 3, 6, 8).
+
     Args:
         image: Input image in PIL format.
-        
+
     Returns:
-        Orientation-corrected image in PIL format.
+        Orientation-corrected image in PIL format (RGB).
     """
     if image is None:
         logger.error("Input image is None")
         raise ValueError("Input image cannot be empty.")
-        
+
     try:
-        # Get EXIF information
-        if hasattr(image, '_getexif') and image._getexif() is not None:
-            # Find orientation tag in EXIF data
-            orientation_key = None
-            for key in ExifTags.TAGS.keys():
-                if ExifTags.TAGS[key] == 'Orientation':
-                    orientation_key = key
-                    break
-                    
-            exif = image._getexif()
-            if exif is not None and orientation_key is not None:
-                orientation = exif.get(orientation_key, 1)
-                logger.info(f"EXIF orientation: {orientation}")
-                
-                # Rotate image based on orientation value
-                if orientation == 3:
-                    image = image.rotate(180, expand=True)
-                    logger.info("Rotated image 180 degrees")
-                elif orientation == 6:
-                    image = image.rotate(270, expand=True)
-                    logger.info("Rotated image 270 degrees")
-                elif orientation == 8:
-                    image = image.rotate(90, expand=True)
-                    logger.info("Rotated image 90 degrees")
-        
-        # Auto-rotate based on image content if no EXIF data
-        # This is an additional safety measure
-        try:
-            # Use ImageOps to auto-orient based on image content
-            image = ImageOps.exif_transpose(image)
-        except Exception as e:
-            logger.warning(f"Failed to auto-orient image: {e}")
-                    
-        # Ensure image is in RGB format
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-            logger.info(f"Converted image from {image.mode} to RGB")
-            
-        return image
-        
+        image = ImageOps.exif_transpose(image)
     except Exception as e:
-        logger.error(f"Error correcting image orientation: {e}")
-        # Return original image if orientation correction fails
-        if image.mode != 'RGB':
-            return image.convert('RGB')
-        return image
+        logger.warning(f"Failed to auto-orient image: {e}")
+
+    # Ensure image is in RGB format
+    if image.mode != 'RGB':
+        logger.info(f"Converting image from {image.mode} to RGB")
+        image = image.convert('RGB')
+
+    return image
 
 def validate_and_crop_card(xywh: np.ndarray,
                            conf: np.ndarray,
@@ -339,16 +312,217 @@ def format_date(date_str: str, code_gender_cen: str, date_type: str) -> str:
             century = '23'
  
     return f"{day}/{month}/{century}{year}"
+# Nhận diện dòng MRZ (TD1, 3 dòng x 30 ký tự) theo nội dung, không theo thứ tự trong mảng.
+MRZ_LINE1_RE = re.compile(r'^ID[A-Z<]{3}')        # IDVNM + số giấy tờ + ...
+MRZ_LINE2_RE = re.compile(r'^\d{7}[MF<]')         # ngày sinh (6) + check (1) + giới tính
+MRZ_LINE3_RE = re.compile(r'^[A-Z<]+$')           # họ tên, chỉ chữ cái và '<'
+
+def classify_mrz_lines(mrz: List[str]) -> Dict[int, str]:
+    """
+    Gán từng dòng OCR đọc được vào dòng 1/2/3 của MRZ dựa trên nội dung.
+    Dòng không khớp mẫu nào, hoặc trùng loại với dòng đã có, thì bỏ qua.
+    """
+    lines: Dict[int, str] = {}
+    for raw in mrz or []:
+        line = (raw or '').replace(' ', '').upper()
+        if not line:
+            continue
+        if MRZ_LINE1_RE.match(line):
+            kind = 1
+        elif MRZ_LINE2_RE.match(line):
+            kind = 2
+        elif MRZ_LINE3_RE.match(line):
+            kind = 3
+        else:
+            logger.warning(f"Unrecognized MRZ line (length {len(line)})")
+            continue
+        if kind in lines:
+            logger.warning(f"Duplicate MRZ line {kind}; keeping the first one")
+            continue
+        lines[kind] = line
+    return lines
+
 def parse_mrz(mrz: List) -> Dict[str, str]:
+    """
+    Parse MRZ TD1. Mỗi dòng được parse độc lập: thiếu dòng nào thì chỉ các trường
+    của dòng đó là "N/A", các trường khác vẫn có.
+
+    Dòng 1: [2:5] quốc gia cấp, [5:14] số giấy tờ, [14] check, [15:27] số CCCD 12 số
+            ([18] = chữ số thứ 4 của số CCCD: mã thế kỷ sinh + giới tính)
+    Dòng 2: [0:6] ngày sinh, [6] check, [7] giới tính, [8:14] ngày hết hạn, [14] check,
+            [15:18] quốc tịch
+    Dòng 3: họ tên
+    """
     res = {
-        "id": mrz[0][15:27],
-        "name": ' '.join(mrz[2][0:].replace('<', ' ').split()), # .split() tự động xóa ' ' dư thừa luôn.
-        "doe": format_date(mrz[1][0:6],mrz[0][18], "doe"),
-        "dob": format_date(mrz[1][0:6],mrz[0][18], "dob"),
-        "nationality": mrz[0][2:5],
-        "sex": mrz[1][7]
+        "id": "N/A",
+        "name": "N/A",
+        "doe": "N/A",
+        "dob": "N/A",
+        "nationality": "N/A",
+        "sex": "N/A"
     }
+    lines = classify_mrz_lines(mrz)
+    line1, line2, line3 = lines.get(1), lines.get(2), lines.get(3)
+
+    century_code = None
+    if line1:
+        if len(line1) >= 27:
+            res["id"] = line1[15:27]
+            century_code = line1[18]
+        res["nationality"] = line1[2:5]
+
+    if line2:
+        if century_code is None:
+            # Không có dòng 1 nên không biết mã thế kỷ: năm 2 số lớn hơn năm hiện tại thì là 19xx.
+            yy = int(line2[0:2])
+            century_code = '0' if yy > datetime.date.today().year % 100 else '2'
+        res["dob"] = format_date(line2[0:6], century_code, "dob")
+        res["sex"] = line2[7]
+        if len(line2) >= 14 and line2[8:14].isdigit():
+            res["doe"] = format_date(line2[8:14], century_code, "doe")
+        if res["nationality"] == "N/A" and len(line2) >= 18:
+            res["nationality"] = line2[15:18]
+
+    if line3:
+        name = ' '.join(line3.replace('<', ' ').split()) # .split() tự động xóa ' ' dư thừa luôn.
+        if name:
+            res["name"] = name
+
     return res
+def mrz_check_digit(text: str) -> str:
+    """Check digit theo ICAO 9303: trọng số 7-3-1, chữ số giữ nguyên, A-Z = 10-35, '<' = 0."""
+    def value(c: str) -> int:
+        if c.isdigit():
+            return int(c)
+        if c == '<':
+            return 0
+        return ord(c) - ord('A') + 10
+    return str(sum(value(c) * w for c, w in zip(text, [7, 3, 1] * 20)) % 10)
+
+def validate_mrz_id(mrz: List[str]) -> Tuple[Optional[str], str]:
+    """
+    Lấy số CCCD 12 số từ MRZ và kiểm tra trước khi dùng.
+    Trả về (id, "") nếu hợp lệ, hoặc (None, lý do) nếu không.
+
+    Dòng 1: [5:14] số giấy tờ (= 9 số cuối của số CCCD), [14] check digit của số giấy tờ,
+            [15:27] số CCCD 12 số.
+    Kiểm tra:
+      1. Số CCCD đủ 12 chữ số.
+      2. Check digit của số giấy tờ khớp.
+      3. 9 số cuối của số CCCD trùng với số giấy tờ.
+      4. Nếu có đủ dòng 2: check digit tổng (dòng 2 [29]) khớp. Bước này phủ cả 3 số đầu
+         (mã tỉnh) của số CCCD, phần mà bước 2-3 không kiểm tra được.
+    """
+    lines = classify_mrz_lines(mrz)
+    line1, line2 = lines.get(1), lines.get(2)
+    if not line1:
+        return None, "MRZ line 1 not detected"
+    if len(line1) < 27:
+        return None, "MRZ line 1 incomplete"
+    doc_number, doc_check, id12 = line1[5:14], line1[14], line1[15:27]
+    if not re.fullmatch(r'\d{12}', id12):
+        return None, "MRZ id is not 12 digits"
+    if mrz_check_digit(doc_number) != doc_check:
+        return None, "MRZ document number check digit mismatch"
+    if id12[3:] != doc_number:
+        return None, "MRZ id does not match document number"
+    if line2 and len(line1) >= 30 and len(line2) >= 30:
+        composite = line1[5:30] + line2[0:7] + line2[8:15] + line2[18:29]
+        if mrz_check_digit(composite) != line2[29]:
+            return None, "MRZ composite check digit mismatch"
+    return id12, ""
+
+def validate_front_id(text: Optional[str]) -> Tuple[Optional[str], str]:
+    """Số CCCD đọc từ mặt trước phải đúng 12 chữ số (Luật Căn cước 2023, Điều 12)."""
+    id_text = re.sub(r'\s+', '', text or '')
+    if not id_text:
+        return None, "id not detected"
+    if not re.fullmatch(r'\d{12}', id_text):
+        return None, "id is not 12 digits"  # không đưa số CCCD vào message/log
+    return id_text, ""
+
+def ensure_valid_id(data: Dict[str, Any], require_side: str) -> None:
+    """
+    Bảo đảm response có số CCCD 12 số hợp lệ; nếu không thì ném IdNotFoundError
+    để router trả errorCode 400 và người dùng chụp lại.
+    - Mặt trước: id do OCR đọc phải đúng 12 chữ số.
+    - Mặt sau: id chỉ lấy từ MRZ và phải qua validate_mrz_id.
+    """
+    if require_side == 'front':
+        valid_id, reason = validate_front_id(data.get('id'))
+        if valid_id is None:
+            raise IdNotFoundError(f"front side: {reason}, please recapture the card")
+        data['id'] = valid_id
+        return
+    valid_id, reason = validate_mrz_id(data.get('mrz') or [])
+    if valid_id is None:
+        raise IdNotFoundError(f"back side: {reason}, please recapture the card")
+    data['id'] = valid_id
+    data['id_prob'] = 1.0
+
+# Từ 01/07/2025 bỏ cấp huyện: địa chỉ trên thẻ CC cấp từ ngày này chỉ còn tỉnh / xã.
+TWO_LEVEL_ADDRESS_FROM = datetime.date(2025, 7, 1)
+
+def parse_issue_date(text: str) -> Optional[datetime.date]:
+    """
+    Đọc ngày cấp dạng dd/mm/yyyy từ chuỗi OCR (chấp nhận dấu phân cách / - . hoặc dấu cách).
+    Trả về None nếu không đọc được, ngày không hợp lệ, hoặc ngày ở tương lai.
+    """
+    match = re.search(r'(\d{1,2})\s*[/\-. ]\s*(\d{1,2})\s*[/\-. ]\s*(\d{4})', text or '')
+    if not match:
+        return None
+    day, month, year = (int(g) for g in match.groups())
+    try:
+        issue_date = datetime.date(year, month, day)
+    except ValueError:
+        return None
+    if issue_date > datetime.date.today():
+        return None
+    return issue_date
+
+def _is_two_level_address(require_type: str, issue_date_text: str) -> bool:
+    """
+    Quyết định tách địa chỉ theo 2 cấp (tỉnh / xã) hay 3 cấp (tỉnh / huyện / xã).
+    - CCCD gắn chip (chỉ cấp đến 30/06/2024): luôn 3 cấp.
+    - CC cấp từ 01/07/2025: 2 cấp. CC cấp trước đó: 3 cấp.
+    - Không đọc được ngày cấp: tách 3 cấp như cũ, ghi warning.
+    """
+    if require_type != 'cc':
+        return False
+    issue_date = parse_issue_date(issue_date_text)
+    if issue_date is None:
+        logger.warning(f"Cannot parse issue_date {issue_date_text!r}; splitting address as 3-level")
+        return False
+    return issue_date >= TWO_LEVEL_ADDRESS_FROM
+
+def split_address(address: str, two_level: bool) -> Dict[str, str]:
+    """
+    Tách chuỗi địa chỉ (các phần cách nhau bằng dấu phẩy) thành custAddress.
+    Thiếu phần nào thì để chuỗi rỗng, không ném lỗi.
+
+    2 cấp: "Số 2 nguyễn trãi, Phú Xuân, Tp.Huế"
+        -> province=Tp.Huế, district="", ward=Phú Xuân, street=Số 2 nguyễn trãi
+    3 cấp: "Ấp Kim Quí A, Vân Khánh, An Minh, Kiên Giang"
+        -> province=Kiên Giang, district=An Minh, ward=Vân Khánh, street=Ấp Kim Quí A
+    """
+    parts = [part.strip() for part in address.split(',') if part.strip()]
+    parts.reverse()  # đi từ cấp lớn nhất (tỉnh) xuống
+    n_admin = 2 if two_level else 3
+    admin = parts[:n_admin] + [''] * (n_admin - len(parts[:n_admin]))
+    street_parts = parts[n_admin:]
+    street_parts.reverse()
+    if two_level:
+        province, ward = admin
+        district = ''
+    else:
+        province, district, ward = admin
+    return {
+        "province": province,
+        "district": district,
+        "ward": ward,
+        "street": ', '.join(street_parts),
+    }
+
 def map_text2card(fieldname_text: Dict[str, Dict[str, Any]], require_type: str, require_side: str) -> Dict[str, Any]:
     """
     Map extracted text fields to card structure.
@@ -379,7 +553,9 @@ def map_text2card(fieldname_text: Dict[str, Dict[str, Any]], require_type: str, 
    
     # print(fieldname_text)
    
-    data = format_res.copy()
+    # Deep copy: format_res chứa dict lồng nhau (custAddress, mrz_details); copy nông
+    # sẽ khiến các request ghi đè lên template dùng chung và rò dữ liệu sang nhau.
+    data = copy.deepcopy(format_res)
     if require_type == 'cc':
         field_mapping = cc_map.copy()
     elif require_type == 'cccd':
@@ -408,22 +584,18 @@ def map_text2card(fieldname_text: Dict[str, Dict[str, Any]], require_type: str, 
                 data[target_field+'_prob'] = score
                 average_score+=score
                 cnt+=1
-                if target_field == 'address':
-                    address = value['text']
-                    address_split = address.split(',')
-                    address_split.reverse()
-                    province, district, ward, *street = address_split
-                    street.reverse()
-                    street = ', '.join(street).strip()
-                    data['custAddress']['province'] = province
-                    data['custAddress']['district'] = district
-                    data['custAddress']['ward'] = ward
-                    data['custAddress']['street'] = street
-                elif target_field == 'mrz' and len(data['mrz']) >= 3:
+                # Parse cả khi thiếu dòng: parse_mrz tự nhận diện từng dòng theo nội dung.
+                if target_field == 'mrz' and len(data['mrz']) >= 1:
                     data['mrz_details'] = parse_mrz(data['mrz'])
+        # Tách custAddress sau vòng lặp, vì cần cả address lẫn issue_date,
+        # mà thứ tự các trường trong fieldname_text không cố định.
+        if data['address']:
+            two_level = _is_two_level_address(require_type, data['issue_date'])
+            data['custAddress'] = split_address(data['address'], two_level)
         if require_side == 'back' and not (data['id'] or '').strip():
-            mrz_id = (data['mrz_details'].get('id') or '').strip()
-            if mrz_id and mrz_id != 'N/A':
+            # Chỉ điền id từ MRZ khi đã qua kiểm tra check digit (xem validate_mrz_id).
+            mrz_id, _ = validate_mrz_id(data['mrz'])
+            if mrz_id:
                 data['id'] = mrz_id
                 data['id_prob'] = 1.0
         if require_type == "cc" and require_side == 'front':
@@ -444,5 +616,6 @@ def map_text2card(fieldname_text: Dict[str, Dict[str, Any]], require_type: str, 
        
     except Exception as e:
         logger.error(f"Error mapping text to card: {e}")
-        # Return partial results if available, otherwise empty dict
-        return data if 'street' in locals() else {}
+        # Trả kết quả dở dang (các trường đã đọc được như id, name, address) thay vì {}.
+        # Điều kiện cũ `'street' in locals()` gần như luôn sai nên vứt cả kết quả.
+        return data

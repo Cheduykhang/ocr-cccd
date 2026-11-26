@@ -10,7 +10,7 @@ from src.logger import logger, request_id_context
 from uuid import uuid4
 from src.load_resources import resources
 from schemas import BaseResponse, ResponseMessage
-from exceptions import CardDetectionError, BadCaptureError, TextRegionDetectError, TextExtractError , BadBoxError
+from exceptions import CardDetectionError, BadCaptureError, TextRegionDetectError, TextExtractError , BadBoxError, IdNotFoundError
 from pydantic import BaseModel
 from dataclasses import asdict
 
@@ -118,6 +118,14 @@ async def ocr_id_card(request: OCRRequest, http_request: Request):
                 data=[],
                 errorCode="400", 
                 errorMessage=ResponseMessage.text_extract_error(str(e))
+            )
+        )
+    except IdNotFoundError as e:
+        logger.error(f"Id Not Found issue: {str(e)}")
+        return asdict(BaseResponse(
+                data=[],
+                errorCode="400",
+                errorMessage=ResponseMessage.id_not_found(str(e))
             )
         )
     except ValueError as ve:

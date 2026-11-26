@@ -9,7 +9,7 @@ from src.logger import logger
 from src.response_logging import JSONResponseLoggingMiddleware
 from src.configs import settings
 from src.load_resources import app_lifespan
-from src.routers import ocr_router, health_rout0
+from src.routers import ocr_router, health_router
 logger.info("Starting OCR identification card application...")
 app = FastAPI(
     title=settings.app_name,

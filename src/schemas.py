@@ -19,6 +19,7 @@ class ResponseMessage:
     BAD_BOX = "Bad Box issue: {}"
     TEXT_REGION_DET_ERROR = "Text Region Detect issue: {}"
     TEXT_EXTRACT_ERROR= "Text Extract issue: {}"
+    ID_NOT_FOUND = "Id Not Found issue: {}"
 
     @staticmethod
     def input_error(err: str) -> str:
@@ -38,6 +39,9 @@ class ResponseMessage:
     @staticmethod
     def text_extract_error(err: str) -> str:
         return ResponseMessage.TEXT_EXTRACT_ERROR.format(err)
+    @staticmethod
+    def id_not_found(err: str) -> str:
+        return ResponseMessage.ID_NOT_FOUND.format(err)
     @staticmethod
     def process_img_error(err: str) -> str:
         return ResponseMessage.PROCESS_ERROR.format(err)
